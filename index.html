@@ -1,396 +1,301 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { initializeApp } from 'firebase/app';
-import { 
-    getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged
-} from 'firebase/auth'; 
-import { 
-    getFirestore, collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, setLogLevel 
-} from 'firebase/firestore'; 
-
-// --- Configuration ---
-const APP_EMAIL = 'sarhank1026@gmail.com';
-const ADMIN_PHONE = '+91 84879 93896';
-
-// --- Firebase Initialization and Globals ---
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
-
-// Function to handle exponential backoff for fetch calls (kept for best practice)
-const fetchWithRetry = async (url, options, retries = 3) => {
-    for (let i = 0; i < retries; i++) {
-        try {
-            const response = await fetch(url, options);
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            return response;
-        } catch (error) {
-            if (i < retries - 1) {
-                const delay = Math.pow(2, i) * 1000;
-                await new Promise(resolve => setTimeout(resolve, delay));
-            } else {
-                throw error;
-            }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ArtShowcase</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+    <style>
+        /* Custom styles for the artistic, Gen Z feel */
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: #1a1a2e;
+            background-image: radial-gradient(circle at 1px 1px, #1f223e 1px, transparent 0);
+            background-size: 20px 20px;
         }
-    }
-};
+        .font-display {
+            font-family: 'Playfair Display', serif;
+        }
+        .genz-gradient-text {
+            background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-fill-color: transparent;
+        }
+        .modal-backdrop {
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(8px);
+        }
+        .custom-btn {
+            background: linear-gradient(45deg, #cc2366, #bc1888);
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px 0 rgba(220, 39, 67, 0.45);
+        }
+        .custom-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px 0 rgba(220, 39, 67, 0.55);
+        }
+        .art-card {
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .art-card:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+        }
+        .art-card-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 1rem;
+            text-align: center;
+        }
+        .art-card:hover .art-card-overlay {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="text-white">
 
-const ArtGallery = () => {
-    const [db, setDb] = useState(null);
-    const [userId, setUserId] = useState(null);
-    const [paintings, setPaintings] = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [showUploadModal, setShowUploadModal] = useState(false);
-    const [showInquiryModal, setShowInquiryModal] = useState(false);
-    const [selectedPainting, setSelectedPainting] = useState(null);
-    const [uploadForm, setUploadForm] = useState({ title: '', artist: '', price: '', imageUrl: '' });
-    const [error, setError] = useState(null);
+    <!-- Main Container -->
+    <div class="container mx-auto px-4 py-8 md:py-12">
+        <header class="text-center mb-12">
+            <h1 class="font-display text-5xl md:text-7xl font-black genz-gradient-text">ArtShowcase</h1>
+            <p class="text-gray-400 mt-2 text-lg">Your digital canvas to share and discover art.</p>
+        </header>
 
-    // Set up Firebase and Authentication
-    useEffect(() => {
-        try {
-            setLogLevel('debug');
-            const app = initializeApp(firebaseConfig);
-            const firestore = getFirestore(app);
-            const authInstance = getAuth(app);
+        <div class="text-center mb-12">
+            <button id="show-upload-modal-btn" class="custom-btn text-white font-bold py-3 px-8 rounded-full text-lg">
+                + Upload Your Art
+            </button>
+        </div>
 
-            setDb(firestore);
+        <!-- Art Gallery -->
+        <main id="art-gallery" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 md:gap-8">
+            <!-- Artworks will be dynamically inserted here -->
+            <div id="gallery-placeholder" class="col-span-full text-center py-20 text-gray-500">
+                <p class="text-2xl">The gallery is waiting for its first masterpiece.</p>
+                <p>Upload your art to begin!</p>
+            </div>
+        </main>
+    </div>
 
-            const unsubscribeAuth = onAuthStateChanged(authInstance, async (user) => {
-                if (user) {
-                    setUserId(user.uid);
-                    setIsLoading(false);
-                } else {
-                    try {
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(authInstance, initialAuthToken);
-                        } else {
-                            await signInAnonymously(authInstance);
-                        }
-                    } catch (e) {
-                        console.error("Firebase Auth Error:", e);
-                        setError("Failed to sign in. Check console for details.");
-                        setIsLoading(false);
-                    }
+    <!-- Artist Upload Modal -->
+    <div id="upload-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop hidden">
+        <div class="bg-[#1f223e] border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md p-6 md:p-8 transform transition-all scale-95 opacity-0">
+            <h2 class="text-2xl font-bold mb-6 text-center">Artist Details</h2>
+            <form id="artist-form">
+                <div class="space-y-4">
+                    <input required type="text" name="name" placeholder="Full Name" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-pink-500">
+                    <input required type="tel" name="mobile" placeholder="Mobile Number" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-pink-500">
+                    <input required type="email" name="email" placeholder="Email Address" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-pink-500">
+                    <textarea required name="address" placeholder="Full Address" rows="3" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-pink-500"></textarea>
+                    <div>
+                        <label for="art-file" class="block mb-2 text-sm font-medium text-gray-400">Upload your artwork</label>
+                        <input required type="file" id="art-file" name="artFile" accept="image/*" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-pink-500 file:text-white hover:file:bg-pink-600 cursor-pointer">
+                    </div>
+                </div>
+                <div class="mt-8 flex justify-between items-center gap-4">
+                    <button type="button" id="cancel-upload-btn" class="w-full text-center py-3 px-6 bg-gray-700 hover:bg-gray-600 rounded-full font-semibold transition-colors">Cancel</button>
+                    <button type="submit" class="w-full custom-btn text-white font-bold py-3 px-6 rounded-full">Submit & Upload</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Buyer Inquiry Modal -->
+    <div id="buyer-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop hidden">
+        <div class="bg-[#1f223e] border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md p-6 md:p-8 transform transition-all scale-95 opacity-0">
+            <h2 class="text-2xl font-bold mb-2 text-center">Purchase Inquiry</h2>
+            <p id="inquiry-artwork-title" class="text-center text-gray-400 mb-6">You are inquiring about "Art by [Artist]"</p>
+            <form id="buyer-form">
+                <input type="hidden" id="artwork-id-input" name="artworkId">
+                 <div class="space-y-4">
+                    <input required type="text" name="name" placeholder="Full Name" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-pink-500">
+                    <input required type="tel" name="mobile" placeholder="Mobile Number" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-pink-500">
+                    <input required type="email" name="email" placeholder="Email Address" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-pink-500">
+                    <textarea required name="address" placeholder="Full Address" rows="3" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-pink-500"></textarea>
+                </div>
+                <div class="mt-8 flex justify-between items-center gap-4">
+                    <button type="button" id="cancel-buyer-btn" class="w-full text-center py-3 px-6 bg-gray-700 hover:bg-gray-600 rounded-full font-semibold transition-colors">Cancel</button>
+                    <button type="submit" class="w-full custom-btn text-white font-bold py-3 px-6 rounded-full">Send Inquiry</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Custom Alert/Notification -->
+    <div id="notification" class="fixed top-5 right-5 bg-green-500 text-white py-2 px-5 rounded-lg shadow-lg opacity-0 transition-opacity duration-300">
+        Message Sent!
+    </div>
+
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // State
+            let artworks = [];
+            const RECIPIENT_EMAIL = 'sarhank1026@gmail.com';
+
+            // DOM Elements
+            const gallery = document.getElementById('art-gallery');
+            const galleryPlaceholder = document.getElementById('gallery-placeholder');
+            
+            // Upload Modal Elements
+            const uploadModal = document.getElementById('upload-modal');
+            const showUploadModalBtn = document.getElementById('show-upload-modal-btn');
+            const cancelUploadBtn = document.getElementById('cancel-upload-btn');
+            const artistForm = document.getElementById('artist-form');
+            const artFileInput = document.getElementById('art-file');
+
+            // Buyer Modal Elements
+            const buyerModal = document.getElementById('buyer-modal');
+            const cancelBuyerBtn = document.getElementById('cancel-buyer-btn');
+            const buyerForm = document.getElementById('buyer-form');
+            const inquiryArtworkTitle = document.getElementById('inquiry-artwork-title');
+            const artworkIdInput = document.getElementById('artwork-id-input');
+
+            // Notification Element
+            const notification = document.getElementById('notification');
+
+            // --- Modal Logic ---
+            function openModal(modal) {
+                modal.classList.remove('hidden');
+                setTimeout(() => {
+                    modal.querySelector('div').classList.remove('scale-95', 'opacity-0');
+                }, 10);
+            }
+
+            function closeModal(modal) {
+                modal.querySelector('div').classList.add('scale-95', 'opacity-0');
+                setTimeout(() => {
+                    modal.classList.add('hidden');
+                }, 300);
+            }
+            
+            showUploadModalBtn.addEventListener('click', () => openModal(uploadModal));
+            cancelUploadBtn.addEventListener('click', () => closeModal(uploadModal));
+            cancelBuyerBtn.addEventListener('click', () => closeModal(buyerModal));
+
+            // --- Notification Logic ---
+            function showNotification(message, duration = 3000) {
+                notification.textContent = message;
+                notification.classList.remove('opacity-0');
+                setTimeout(() => {
+                    notification.classList.add('opacity-0');
+                }, duration);
+            }
+
+            // --- Gallery Logic ---
+            function renderGallery() {
+                if(artworks.length === 0) {
+                    galleryPlaceholder.style.display = 'block';
+                    gallery.innerHTML = '';
+                    gallery.appendChild(galleryPlaceholder);
+                    return;
+                }
+
+                galleryPlaceholder.style.display = 'none';
+                gallery.innerHTML = ''; // Clear previous content
+                artworks.forEach(art => {
+                    const artCard = document.createElement('div');
+                    artCard.className = 'bg-gray-800 rounded-xl shadow-lg cursor-pointer art-card';
+                    artCard.innerHTML = `
+                        <img src="${art.imageSrc}" alt="Artwork by ${art.artistName}" class="w-full h-72 object-cover rounded-t-xl">
+                        <div class="p-4">
+                            <h3 class="font-bold text-lg truncate">Artwork by ${art.artistName}</h3>
+                        </div>
+                        <div class="art-card-overlay">
+                            <h3 class="text-xl font-bold mb-2">By ${art.artistName}</h3>
+                            <button data-id="${art.id}" class="buy-btn mt-4 custom-btn text-white font-semibold py-2 px-6 rounded-full">
+                                I want to buy this
+                            </button>
+                        </div>
+                    `;
+                    gallery.appendChild(artCard);
+                });
+            }
+
+            // --- Form Submission Logic ---
+            artistForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const formData = new FormData(artistForm);
+                const artistDetails = Object.fromEntries(formData.entries());
+                const artFile = artFileInput.files[0];
+
+                if (artFile) {
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        const newArt = {
+                            id: Date.now(),
+                            artistName: artistDetails.name,
+                            imageSrc: event.target.result
+                        };
+                        artworks.push(newArt);
+                        renderGallery();
+                        
+                        // Create and trigger mailto link for artist details
+                        const subject = "New Artist Submission on ArtShowcase";
+                        const body = `A new artist has uploaded their work.\n\nArtist Details:\n-----------------\nName: ${artistDetails.name}\nMobile: ${artistDetails.mobile}\nEmail: ${artistDetails.email}\nAddress: ${artistDetails.address}`;
+                        window.location.href = `mailto:${RECIPIENT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+                        artistForm.reset();
+                        closeModal(uploadModal);
+                        showNotification('Art uploaded successfully!');
+                    };
+                    reader.readAsDataURL(artFile);
                 }
             });
 
-            return () => unsubscribeAuth();
+            buyerForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const formData = new FormData(buyerForm);
+                const buyerDetails = Object.fromEntries(formData.entries());
+                const artwork = artworks.find(art => art.id == buyerDetails.artworkId);
+                
+                if (artwork) {
+                    const subject = `Purchase Inquiry for Artwork by ${artwork.artistName}`;
+                    const body = `A potential buyer is interested in an artwork.\n\nArtwork ID: ${artwork.id}\nArtist: ${artwork.artistName}\n\nBuyer Details:\n-----------------\nName: ${buyerDetails.name}\nMobile: ${buyerDetails.mobile}\nEmail: ${buyerDetails.email}\nAddress: ${buyerDetails.address}`;
+                    window.location.href = `mailto:${RECIPIENT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                    
+                    buyerForm.reset();
+                    closeModal(buyerModal);
+                    showNotification('Inquiry sent successfully!');
+                }
+            });
 
-        } catch (e) {
-            console.error("Firebase Initialization Error:", e);
-            setError("Failed to initialize Firebase.");
-            setIsLoading(false);
-        }
-    }, []);
-
-    // Fetch and listen for real-time painting data
-    useEffect(() => {
-        if (!db || !userId) return;
-
-        const collectionPath = `artifacts/${appId}/public/data/artGallery`;
-        const paintingsCollection = collection(db, collectionPath);
-        
-        const unsubscribeSnapshot = onSnapshot(paintingsCollection, (snapshot) => {
-            const fetchedPaintings = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data(),
-                status: doc.data().status || 'available' // Ensure status defaults to available
-            }));
-            setPaintings(fetchedPaintings);
-            setIsLoading(false); 
-        }, (e) => {
-            console.error("Firestore Snapshot Error:", e);
-            setError("Failed to load paintings from the database.");
-            setIsLoading(false);
+            // Event delegation for buy buttons
+            gallery.addEventListener('click', (e) => {
+                if (e.target.classList.contains('buy-btn')) {
+                    const artId = e.target.dataset.id;
+                    const artwork = artworks.find(art => art.id == artId);
+                    if(artwork) {
+                        artworkIdInput.value = artwork.id;
+                        inquiryArtworkTitle.textContent = `You are inquiring about "Artwork by ${artwork.artistName}"`;
+                        openModal(buyerModal);
+                    }
+                }
+            });
+            
+            // Initial render
+            renderGallery();
         });
+    </script>
 
-        return () => unsubscribeSnapshot();
-    }, [db, userId]);
+</body>
+</html>
 
-    // --- Data Handlers ---
-
-    const handleUploadChange = (e) => {
-        setUploadForm({ ...uploadForm, [e.target.name]: e.target.value });
-    };
-
-    const handleUploadSubmit = async (e) => {
-        e.preventDefault();
-        if (!db) {
-            setError("Database not initialized.");
-            return;
-        }
-
-        const { title, artist, price, imageUrl } = uploadForm;
-        if (!title || !artist || !price) {
-            setError("Please fill in Title, Artist, and Price.");
-            return;
-        }
-
-        const newPainting = {
-            title: title.trim(),
-            artist: artist.trim(),
-            price: parseFloat(price).toFixed(2),
-            imageUrl: imageUrl.trim() || `https://placehold.co/400x300/a35d6a/ffffff?text=${encodeURIComponent(title)}`,
-            status: 'available',
-            createdAt: new Date().toISOString()
-        };
-
-        try {
-            setIsLoading(true);
-            const collectionPath = `artifacts/${appId}/public/data/artGallery`;
-            await addDoc(collection(db, collectionPath), newPainting);
-            setUploadForm({ title: '', artist: '', price: '', imageUrl: '' });
-            setShowUploadModal(false);
-            setError(null);
-        } catch (e) {
-            console.error("Error adding document: ", e);
-            setError("Failed to upload painting. Please try again.");
-        } finally {
-            setIsLoading(false);
-        }
-    };
-    
-    // Function to open the inquiry modal
-    const handleBuyNowClick = (painting) => {
-        setSelectedPainting(painting);
-        setShowInquiryModal(true);
-    };
-
-    const handleRemovePainting = async (id) => {
-        if (!db) return;
-        
-        const isConfirmed = window.prompt(`Type 'DELETE' to confirm removing painting ID: ${id}`);
-        if (isConfirmed !== 'DELETE') return;
-
-        try {
-            setIsLoading(true);
-            const docPath = `artifacts/${appId}/public/data/artGallery/${id}`;
-            await deleteDoc(doc(db, docPath));
-            setError(null);
-        } catch (e) {
-            console.error("Error removing document: ", e);
-            setError("Failed to remove painting.");
-        } finally {
-            setIsLoading(false);
-        }
-    };
-    
-    // --- Inquiry Modal Component ---
-
-    const InquiryModal = ({ painting, onClose }) => {
-        const [formData, setFormData] = useState({
-            name: '',
-            mobile: '',
-            email: '',
-            address: ''
-        });
-        const [isSubmitting, setIsSubmitting] = useState(false);
-
-        const handleChange = (e) => {
-            setFormData({ ...formData, [e.target.name]: e.target.value });
-        };
-
-        const handleSubmitInquiry = async (e) => {
-            e.preventDefault();
-            if (!db || !painting) return;
-
-            setIsSubmitting(true);
-
-            // 1. Construct the email body
-            const subject = encodeURIComponent(`Purchase Inquiry for: ${painting.title}`);
-            const body = encodeURIComponent(
-                `Hello, I am interested in purchasing the following painting:\n\n` +
-                `Painting Title: ${painting.title}\n` +
-                `Artist: ${painting.artist}\n` +
-                `Price: $${painting.price}\n` +
-                `Painting ID: ${painting.id}\n\n` +
-                `---\n\n` +
-                `My contact details are:\n` +
-                `Name: ${formData.name}\n` +
-                `Mobile No: ${formData.mobile}\n` +
-                `Email: ${formData.email}\n` +
-                `Shipping Address: ${formData.address}\n\n` +
-                `Please contact me to finalize the transaction.`
-            );
-
-            // 2. Open the user's default email client
-            const mailtoLink = `mailto:${APP_EMAIL}?subject=${subject}&body=${body}`;
-            window.open(mailtoLink, '_blank');
-
-            // 3. Update Firestore status for real-time seller notification
-            try {
-                const docPath = `artifacts/${appId}/public/data/artGallery/${painting.id}`;
-                await updateDoc(doc(db, docPath), {
-                    status: 'pending_inquiry',
-                    inquiredBy: {
-                        name: formData.name,
-                        email: formData.email,
-                        mobile: formData.mobile,
-                        timestamp: new Date().toISOString()
-                    },
-                });
-                setError(null);
-            } catch (e) {
-                console.error("Error updating inquiry status: ", e);
-                setError("Failed to mark item as pending inquiry in the database.");
-            } finally {
-                setIsSubmitting(false);
-                onClose();
-                // Optional message to user (using prompt as a simple modal replacement)
-                window.prompt("Inquiry Sent! Please check your email client for the draft purchase email. We will contact you soon. Click OK to continue.");
-            }
-        };
-
-        return (
-            <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-                <div className="bg-white p-6 rounded-xl shadow-2xl w-full max-w-lg transform transition-all duration-300 scale-100">
-                    <h2 className="text-2xl font-bold mb-4 text-indigo-700 border-b pb-2">Purchase Inquiry: {painting.title}</h2>
-                    <p className="text-sm text-gray-600 mb-4">Please enter your details below. Clicking "Send Inquiry" will open your email client to send your purchase request to the gallery.</p>
-                    <form onSubmit={handleSubmitInquiry} className="space-y-4">
-                        <div>
-                            <label htmlFor="name" className="block text-sm font-medium text-gray-700">Full Name</label>
-                            <input
-                                type="text"
-                                id="name"
-                                name="name"
-                                value={formData.name}
-                                onChange={handleChange}
-                                required
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                            />
-                        </div>
-                        <div>
-                            <label htmlFor="mobile" className="block text-sm font-medium text-gray-700">Mobile No.</label>
-                            <input
-                                type="tel"
-                                id="mobile"
-                                name="mobile"
-                                value={formData.mobile}
-                                onChange={handleChange}
-                                required
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                            />
-                        </div>
-                        <div>
-                            <label htmlFor="email" className="block text-sm font-medium text-gray-700">Email Address</label>
-                            <input
-                                type="email"
-                                id="email"
-                                name="email"
-                                value={formData.email}
-                                onChange={handleChange}
-                                required
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                            />
-                        </div>
-                        <div>
-                            <label htmlFor="address" className="block text-sm font-medium text-gray-700">Shipping Address</label>
-                            <textarea
-                                id="address"
-                                name="address"
-                                value={formData.address}
-                                onChange={handleChange}
-                                rows="3"
-                                required
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                            />
-                        </div>
-                        <div className="flex justify-end space-x-3 mt-6">
-                            <button
-                                type="button"
-                                onClick={onClose}
-                                disabled={isSubmitting}
-                                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition duration-150"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="submit"
-                                disabled={isSubmitting}
-                                className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 transition duration-150 shadow-md hover:shadow-lg flex items-center space-x-2"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                    <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
-                                    <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
-                                </svg>
-                                <span>{isSubmitting ? 'Processing...' : 'Send Inquiry'}</span>
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        );
-    };
-
-    // --- Components / UI helpers ---
-
-    const UploadModal = ({ onClose }) => (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-            <div className="bg-white p-6 rounded-xl shadow-2xl w-full max-w-lg transform transition-all duration-300 scale-100">
-                <h2 className="text-2xl font-bold mb-4 text-gray-800 border-b pb-2">Upload New Painting</h2>
-                <form onSubmit={handleUploadSubmit} className="space-y-4">
-                    {/* Form fields remain the same */}
-                    <div>
-                        <label htmlFor="title" className="block text-sm font-medium text-gray-700">Title</label>
-                        <input type="text" id="title" name="title" value={uploadForm.title} onChange={handleUploadChange} required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"/>
-                    </div>
-                    <div>
-                        <label htmlFor="artist" className="block text-sm font-medium text-gray-700">Artist</label>
-                        <input type="text" id="artist" name="artist" value={uploadForm.artist} onChange={handleUploadChange} required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"/>
-                    </div>
-                    <div>
-                        <label htmlFor="price" className="block text-sm font-medium text-gray-700">Price (USD)</label>
-                        <input type="number" id="price" name="price" step="0.01" min="0.01" value={uploadForm.price} onChange={handleUploadChange} required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"/>
-                    </div>
-                    <div>
-                        <label htmlFor="imageUrl" className="block text-sm font-medium text-gray-700">Image URL (Optional)</label>
-                        <input type="url" id="imageUrl" name="imageUrl" value={uploadForm.imageUrl} onChange={handleUploadChange} placeholder="Enter image URL or a placeholder will be used" className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"/>
-                    </div>
-                    <div className="flex justify-end space-x-3 mt-6">
-                        <button type="button" onClick={onClose} disabled={isLoading} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition duration-150">Cancel</button>
-                        <button type="submit" disabled={isLoading} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition duration-150 shadow-md hover:shadow-lg">
-                            {isLoading ? 'Uploading...' : 'Upload Painting'}
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    );
-
-    const PaintingCard = ({ painting }) => {
-        const isSold = painting.status === 'sold';
-        const isPending = painting.status === 'pending_inquiry';
-        const statusClass = isSold ? 'bg-red-500' : isPending ? 'bg-yellow-500' : 'bg-green-500';
-
-        return (
-            <div className={`bg-white rounded-xl shadow-lg overflow-hidden flex flex-col transition-transform duration-300 hover:scale-[1.02] hover:shadow-2xl ${isSold || isPending ? 'opacity-80' : ''}`}>
-                <div className="aspect-w-4 aspect-h-3 overflow-hidden relative">
-                    <img
-                        src={painting.imageUrl}
-                        alt={painting.title}
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                            e.target.onerror = null;
-                            e.target.src = `https://placehold.co/400x300/e0e0e0/333333?text=Image+Not+Found`;
-                        }}
-                    />
-                    {(isSold || isPending) && (
-                        <div className="absolute top-2 right-2 px-3 py-1 text-xs font-bold text-white uppercase rounded-full shadow-md" style={{backgroundColor: statusClass === 'bg-red-500' ? '#ef4444' : '#f59e0b'}}>
-                            {isSold ? 'SOLD' : 'Pending Inquiry'}
-                        </div>
-                    )}
-                </div>
-                <div className="p-4 flex flex-col flex-grow">
-                    <h3 className="text-xl font-semibold text-gray-900 line-clamp-2">{painting.title}</h3>
-                    <p className="text-sm text-indigo-600 font-medium mt-1 mb-2">{painting.artist}</p>
-                    <div className="flex justify-between items-center mt-auto pt-2 border-t border-gray-100">
-                        
-                        {/* Price and Status Display */}
-                        <p className="text-2xl font-bold text-gray-800">${painting.price}</p>
-                        
-                        <div className='flex space-x-2 items-center'>
-                            {/* Purchase Button - Only available if not sold/pending */}
-                            {!isSold && !isPending && (
-                                <button
-                                    onClick={() => handleBuyNowClick(painting)}
-                                    disabled={isLo
